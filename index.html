@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>HomeBound</title>
+    
+    <base href="/HomeBound/" />
+
+    <link href="manifest.json" rel="manifest" />
+    
+    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png" />
+    
+    <link rel="icon" type="image/x-icon" href="favicon.ico" />
+
+    <link href="css/bootstrap/bootstrap.min.css" rel="stylesheet" />
+    <link href="css/app.css" rel="stylesheet" />
+    <link href="InmoCierres.styles.css" rel="stylesheet" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@700&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+   <div id="app">
+        </div>
+
+    <div id="wise-splash" class="splash-container">
+        <div class="splash-curtain top"></div>
+        <div class="splash-curtain bottom"></div>
+        <div class="splash-content">
+            <img src="logo.png" alt="HomeBound Logo" class="splash-logo" />
+            <div class="splash-text">HomeBound</div>
+            <div class="loading-bar-container">
+                <div class="loading-bar"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="blazor-error-ui">
+        An unhandled error has occurred.
+        <a href="" class="reload">Reload</a>
+        <a class="dismiss">🗙</a>
+    </div>
+
+    <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-storage-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-storage-compat.js"></script>
+
+    <script>
+        const firebaseConfig = {
+            apiKey: "AIzaSyC9Gf9YBWVYaNeCRCPt-2yfwQhJ40hHlo0",
+            authDomain: "homebound-5ed20.firebaseapp.com",
+            projectId: "homebound-5ed20",
+            storageBucket: "homebound-5ed20.firebasestorage.app",
+            messagingSenderId: "463623910254",
+            appId: "1:463623910254:web:b05c03ee06eaa0b935477f",
+            measurementId: "G-5EE05DJM0F"
+        };
+
+        const app = firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+        const storage = firebase.storage();
+
+       // --- FUNCIONES DE AUTENTICACIÓN ---
+    window.loginGoogle = async () => {
+        const provider = new firebase.auth.GoogleAuthProvider();
+        try {
+            const result = await auth.signInWithPopup(provider);
+            const user = result.user;
+
+            // --- 🪄 MAGIA DE AUTO-REGISTRO ---
+            // 1. Buscamos si este correo ya existe en tu colección de usuarios
+            const snapshot = await db.collection("usuarios").where("Email", "==", user.email).get();
+
+            // 2. Si la búsqueda regresa vacía (es su primera vez en la app)
+            if (snapshot.empty) {
+                
+                await db.collection("usuarios").doc(user.email).set({
+                    Email: user.email,
+                    Nombre: user.displayName || "Asesor Externo",
+                    Rol: "COLABORADOR",
+                    Empresa: "Agencia Externa", 
+                    Estatus: "Activo"
+                });
+                console.log("Nuevo colaborador registrado automáticamente en Firestore.");
+            }
+            // --- FIN DE LA MAGIA ---
+
+            return { nombre: user.displayName, email: user.email, fotoUrl: user.photoURL, uid: user.uid }; 
+        } catch (error) { 
+            console.error("Error en login:", error); 
+            return null; 
+        }
+    };
+
+    window.logoutFirebase = async () => { await auth.signOut(); };
+
+    window.obtenerUsuarioActual = () => {
+        return new Promise((resolve) => {
+            // onAuthStateChanged espera a que Firebase revise su memoria caché
+            const unsubscribe = auth.onAuthStateChanged(user => {
+                unsubscribe(); // Solo queremos que escuche la primera vez al recargar
+                if (user) {
+                    resolve({ nombre: user.displayName, email: user.email, fotoUrl: user.photoURL, uid: user.uid });
+                } else {
+                    resolve(null); // Nadie logueado
+                }
+            });
+        });
+    };
+
+// --- FUNCIONES DE BASE DE DATOS ---
+    window.guardarExpedienteFirestore = async (expedienteJson) => {
+        const data = JSON.parse(expedienteJson);
+        await db.collection("expedientes").doc(data.Id).set(data);
+    };
+
+    window.obtenerExpedientesFirestore = async (email) => {
+        try {
+            // Plan B de seguridad: Si C# no mandó el correo, lo sacamos de la sesión actual
+            if (!email) {
+                const user = auth.currentUser;
+                if (user) email = user.email;
+            }
+
+            // Ahora sí buscamos mágicamente en la lista de Colaboradores
+            const snapshot = await db.collection("expedientes").where("Colaboradores", "array-contains", email).get();
+            
+            let lista = [];
+            snapshot.forEach(doc => { lista.push(doc.data()); });
+            
+            return JSON.stringify(lista);
+        } catch (error) {
+            console.error("Error obteniendo expedientes:", error);
+            return "[]";
+        }
+    };
+
+    window.eliminarExpedienteFirestore = async (id) => {
+        try {
+            await db.collection("expedientes").doc(id).delete();
+            console.log("Expediente eliminado: " + id);
+        } catch (error) {
+            console.error("Error al eliminar:", error);
+        }
+    };
+
+   window.obtenerUnicoExpediente = async (id) => {
+        try {
+            // 1. Limpiamos cualquier espacio invisible accidental en el enlace
+            const idLimpio = id.trim(); 
+            
+            const doc = await db.collection("expedientes").doc(idLimpio).get();
+            
+            if (doc.exists) {
+                // 2. Le inyectamos el ID explícitamente por si C# lo necesita al armar el objeto
+                let datos = doc.data();
+                datos.Id = doc.id; 
+                return JSON.stringify(datos);
+            } else {
+                // 3. Si de verdad no existe, que nos lo diga con el ID exacto que buscó
+                alert(`🔍 JS dice: El documento con ID '${idLimpio}' no existe en la base de datos.`);
+                return null;
+            }
+        } catch (error) {
+            
+            alert(`🚨 JS dice: Firebase bloqueó la lectura. Motivo: ${error.message}`);
+            console.error("Error buscando expediente:", error);
+            return null;
+        }
+    };
+
+    
+    window.actualizarDocumentosExpediente = async (idExpediente, checklistJson) => {
+        try {
+            
+            const documentos = typeof checklistJson === 'string' ? JSON.parse(checklistJson) : checklistJson;
+            
+            await db.collection("expedientes").doc(idExpediente).update({
+                Documentos: documentos
+            });
+            console.log("Estado de documentos guardado en Firestore.");
+        } catch (error) {
+            console.error("Error al actualizar estado de documentos:", error);
+        }
+    };
+   
+
+    // --- FUNCIONES DE STORAGE (FOTOS) ---
+    window.subirImagenStorage = async (nombreArchivo, base64) => {
+        try {
+            const ref = storage.ref().child("fotos_propiedades/" + nombreArchivo);
+            await ref.putString(base64, 'base64');
+            const url = await ref.getDownloadURL();
+            return url;
+        } catch (error) {
+            console.error("Error subiendo imagen:", error);
+            return null;
+        }
+    };
+
+    window.subirArchivoStorage = async (idExpediente, idDoc, streamRef, contentType) => {
+        try {
+            // 1. Convertir el archivo que manda Blazor a formato web
+            const arrayBuffer = await streamRef.arrayBuffer();
+            const blob = new Blob([arrayBuffer], { type: contentType });
+
+            // 2. Crear la ruta en Storage (ej: expedientes/abc123X/ACT_NAC.pdf)
+            const extension = contentType.includes("pdf") ? ".pdf" : ".jpg";
+            const storageRef = firebase.storage().ref(`expedientes/${idExpediente}/${idDoc}${extension}`);
+
+            // 3. Subir el archivo
+            console.log(`Subiendo documento ${idDoc}...`);
+            await storageRef.put(blob);
+
+            // 4. Obtener el link de descarga público y regresarlo a Blazor
+            const url = await storageRef.getDownloadURL();
+            console.log("¡Archivo subido con éxito!");
+            return url;
+        } catch (error) {
+            console.error("Error al subir a Storage:", error);
+            throw error;
+        }
+    };
+
+    window.borrarArchivoStorage = async (idExpediente, idDoc) => {
+        // Intentamos borrar tanto PDF como JPG por seguridad
+        const extensiones = [".pdf", ".jpg"];
+        
+        for (let ext of extensiones) {
+            try {
+                const storageRef = firebase.storage().ref(`expedientes/${idExpediente}/${idDoc}${ext}`);
+                await storageRef.delete();
+                console.log(`Archivo ${idDoc}${ext} borrado con éxito.`);
+            } catch (error) {
+                // Es normal que caiga aquí si intentó borrar un .jpg pero el archivo era .pdf
+            }
+        }
+    };
+
+    // --- FUNCIONES DE ROLES (SAAS) ---
+    window.obtenerRolUsuario = async (email) => {
+        try {
+            const doc = await db.collection("usuarios").doc(email).get();
+            if (doc.exists) {
+                return JSON.stringify(doc.data());
+            } else {
+                return null;
+            }
+        } catch (error) {
+            console.error("Error obteniendo rol:", error);
+            return null;
+        }
+    };
+    // --- FUNCIONES DE CIERRE Y RESPALDO ---
+
+// 1. Sellar el expediente con la fecha de envío
+    window.sellarExpedienteFirestore = async (idExpediente, datosCierre) => {
+        try {
+            await db.collection("expedientes").doc(idExpediente).update(datosCierre);
+            console.log("Expediente sellado. Cuenta regresiva de 10 días iniciada.");
+        } catch (error) {
+            console.error("Error al sellar expediente:", error);
+            throw error;
+        }
+    };
+
+    // 2. Generar el respaldo local descargable (Por ahora un Acuse de Recibo en .txt)
+    window.descargarRespaldoExpediente = (idExpediente, checklistJson, formato) => {
+        // 1. Convertimos el JSON a objeto
+        const checklist = typeof checklistJson === 'string' ? JSON.parse(checklistJson) : checklistJson;
+        
+        // 2. Le avisamos al sistema qué botón presionó el asesor
+        if (formato === "ZIP") {
+            console.log("📦 Preparando archivo ZIP...");
+            alert(`[Fase de Pruebas]: Has elegido descargar una CARPETA ZIP. En la versión final, aquí se descargarán todos los PDFs separados.`);
+        } else {
+            console.log("📄 Preparando archivo PDF único...");
+            alert(`[Fase de Pruebas]: Has elegido descargar 1 SOLO PDF. En la versión final, aquí se fusionarán todas las páginas.`);
+        }
+
+        // 3. Armamos el texto del Acuse de Recibo (que usaremos como comprobante temporal)
+        let contenido = `======================================\n`;
+        contenido += ` RESPALDO DE EXPEDIENTE: ${idExpediente}\n`;
+        contenido += ` FORMATO SOLICITADO: ${formato}\n`;
+        contenido += `======================================\n`;
+        contenido += `Fecha de cierre: ${new Date().toLocaleString()}\n\n`;
+        contenido += `ESTATUS DE DOCUMENTOS:\n`;
+        
+        checklist.forEach(doc => {
+            if(doc.cargado || doc.Cargado) {
+                contenido += `[✔️] ${doc.nombre || doc.Nombre}\n`;
+            } else {
+                contenido += `[  ] ${doc.nombre || doc.Nombre} (No cargado/Opcional)\n`;
+            }
+        });
+
+        contenido += `\n--------------------------------------\n`;
+        contenido += `⚠️ AVISO LEGAL: Este expediente y todos sus archivos adjuntos `;
+        contenido += `serán eliminados de la nube en 10 días naturales por políticas de seguridad.`;
+
+        // 4. Forzamos la descarga
+        const blob = new Blob([contenido], { type: 'text/plain;charset=utf-8' });
+        const url = window.URL.createObjectURL(blob);
+        const enlace = document.createElement('a');
+        
+        enlace.href = url;
+        // Cambiamos el nombre del archivo para que diga si era ZIP o PDF
+        enlace.download = `Acuse_${formato}_${idExpediente}.txt`; 
+        
+        document.body.appendChild(enlace);
+        enlace.click(); // Simulamos el clic
+        
+        // Limpiamos la memoria
+        document.body.removeChild(enlace);
+        window.URL.revokeObjectURL(url);
+    };
+    window.abrirArchivoStorage = async (idExpediente, idDoc) => {
+        // Lista de las extensiones que permitimos subir
+        const extensiones = [".pdf", ".jpg", ".png", ".webp"];
+        
+        for (let ext of extensiones) {
+            try {
+                const storageRef = firebase.storage().ref(`expedientes/${idExpediente}/${idDoc}${ext}`);
+                // Si el archivo existe, esto nos dará la URL secreta
+                const url = await storageRef.getDownloadURL();
+                
+                // Lo abrimos en una nueva pestaña
+                window.open(url, '_blank');
+                return; // Salimos de la función porque ya lo encontramos
+            } catch (error) {
+                // Es normal que falle aquí si está buscando un .pdf pero el archivo era .jpg
+                // Simplemente ignora el error y pasa a la siguiente extensión del ciclo
+            }
+        }
+        
+        // Si terminó el ciclo y no encontró nada:
+        alert("No se pudo encontrar el archivo en la nube. Es posible que haya sido eliminado.");
+    };
+    // Borra cualquier archivo de Firebase Storage si le pasas la URL completa
+    window.borrarArchivoPorUrl = async (urlArchivo) => {
+        try {
+            if(!urlArchivo) return;
+            // Firebase es inteligente y puede deducir la ubicación física a partir de la URL pública
+            const archivoRef = firebase.storage().refFromURL(urlArchivo);
+            await archivoRef.delete();
+            console.log("📸 Foto de perfil eliminada de la nube.");
+        } catch (error) {
+            // A veces falla si la foto ya se había borrado manualmente, lo ignoramos para no frenar el proceso
+            console.warn("No se pudo borrar la foto (quizás ya no existía):", error);
+        }
+    };
+    window.agregarColaboradorFirebase = async (id, email) => {
+        try {
+            await db.collection("expedientes").doc(id).update({
+                // arrayUnion: Agrega el correo SIN borrar a los que ya estaban
+                Colaboradores: firebase.firestore.FieldValue.arrayUnion(email)
+            });
+        } catch (error) { console.error("Error al agregar:", error); }
+    };
+
+    window.eliminarColaboradorFirebase = async (id, email) => {
+        try {
+            await db.collection("expedientes").doc(id).update({
+                // arrayRemove: Quita solo este correo, deja a los demás intactos
+                Colaboradores: firebase.firestore.FieldValue.arrayRemove(email)
+            });
+        } catch (error) { console.error("Error al eliminar:", error); }
+    };
+    </script>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <script src="_framework/blazor.webassembly.js"></script>
+    <script type="text/javascript">
+     
+      (function(l) {
+        if (l.search[1] === 'p') {
+          var q = l.search.slice(1).split('&').map(function(s) { return s.replace(/~and~/g, '&') });
+          if (q[0].indexOf('p=') === 0) {
+            window.history.replaceState(null, null,
+              l.pathname.slice(0, -1) + q[0].slice(2) +
+              (q[1] ? ('?' + q[1].slice(2)) : '') +
+              l.hash
+            );
+          }
+        }
+      }(window.location));
+      
+    </script> 
+    <script>
+    // Vigila el div principal de Blazor
+    const appDiv = document.getElementById('app');
+    
+    const observer = new MutationObserver((mutations, obs) => {
+        // Si el div ya tiene contenido, ¡significa que Blazor ya cargó!
+        if (appDiv.children.length > 0) {
+            
+            // 1. Añadimos la clase para que se abra la cortina
+            document.getElementById('wise-splash').classList.add('loaded');
+            
+            // 2. Apagamos el vigilante
+            obs.disconnect();
+            
+            // 3. Limpiamos la basura: 1.5 segundos después borramos el HTML de la cortina para liberar memoria RAM
+            setTimeout(() => {
+                const splash = document.getElementById('wise-splash');
+                if (splash) splash.remove();
+            }, 1500);
+        }
+    });
+    
+    // Le decimos al vigilante que empiece a observar
+    observer.observe(appDiv, { childList: true });
+</script>
+</body>
+</html>
